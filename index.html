@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>US Federal Tax Collection Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.7/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #333; }
+
+  header {
+    background: #0a1628;
+    color: #fff;
+    padding: 24px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
+  header .timestamp { font-size: 0.85rem; color: #8899bb; }
+
+  .note {
+    max-width: 1400px;
+    margin: 20px auto 0;
+    padding: 12px 20px;
+    background: #e8f0fe;
+    border-left: 4px solid #1a73e8;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    color: #1a3d6f;
+    line-height: 1.5;
+  }
+
+  .container { max-width: 1400px; margin: 20px auto; padding: 0 16px; }
+
+  .section-title {
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin: 32px 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #1a73e8;
+    color: #0a1628;
+  }
+
+  .card {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    padding: 24px;
+    margin-bottom: 24px;
+  }
+  .card h3 { font-size: 1rem; font-weight: 600; margin-bottom: 16px; color: #0a1628; }
+
+  .chart-container { position: relative; width: 100%; max-height: 420px; }
+  .chart-container canvas { width: 100% !important; }
+
+  /* Tables */
+  .table-wrapper { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th { background: #0a1628; color: #fff; padding: 10px 12px; text-align: right; white-space: nowrap; }
+  th:first-child { text-align: left; }
+  td { padding: 8px 12px; border-bottom: 1px solid #e5e7eb; text-align: right; white-space: nowrap; }
+  td:first-child { text-align: left; }
+  tr:hover td { background: #f8f9fb; }
+  .positive { color: #16a34a; font-weight: 600; }
+  .negative { color: #dc2626; font-weight: 600; }
+
+  /* Loading */
+  .loading-overlay {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px;
+    gap: 16px;
+  }
+  .spinner {
+    width: 40px; height: 40px;
+    border: 4px solid #e5e7eb;
+    border-top-color: #1a73e8;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text { color: #666; font-size: 0.9rem; }
+
+  /* Error */
+  .error-msg {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-left: 4px solid #dc2626;
+    color: #991b1b;
+    padding: 16px 20px;
+    border-radius: 4px;
+    margin: 16px 0;
+    font-size: 0.9rem;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    header { padding: 16px; }
+    header h1 { font-size: 1.2rem; }
+    .card { padding: 16px; }
+    .container { padding: 0 8px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>US Federal Tax Collection Dashboard</h1>
+  <div class="timestamp" id="lastUpdated">Loading...</div>
+</header>
+
+<div class="note">
+  <strong>Data sources:</strong> Monthly Treasury Statement (MTS) and Daily Treasury Statement (DTS) via
+  US Treasury Fiscal Data API. Monthly data updated ~6 weeks after month-end. Daily data updated each business day.
+</div>
+
+<div class="container">
+
+  <!-- ====== SECTION 1: MONTHLY DATA ====== -->
+  <div class="section-title">Section 1 — Monthly Data (MTS)</div>
+
+  <div id="mtsLoading" class="card">
+    <div class="loading-overlay"><div class="spinner"></div><div class="loading-text">Loading monthly data...</div></div>
+  </div>
+  <div id="mtsError" class="error-msg" style="display:none;"></div>
+  <div id="mtsContent" style="display:none;">
+
+    <div class="card">
+      <h3>Chart 1: YoY % Change in Total Receipts (Rolling 24 Months)</h3>
+      <div class="chart-container"><canvas id="chart1"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Chart 2: YoY % Change by Tax Category</h3>
+      <div class="chart-container"><canvas id="chart2"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Monthly Receipts Data</h3>
+      <div class="table-wrapper">
+        <table id="mtsTable">
+          <thead>
+            <tr>
+              <th>Month</th>
+              <th>Total Receipts ($bn)</th>
+              <th>YoY $ Change ($bn)</th>
+              <th>YoY % Change</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== SECTION 2: DAILY DATA ====== -->
+  <div class="section-title">Section 2 — Daily Data (DTS)</div>
+
+  <div id="dtsLoading" class="card">
+    <div class="loading-overlay"><div class="spinner"></div><div class="loading-text">Loading daily data...</div></div>
+  </div>
+  <div id="dtsError" class="error-msg" style="display:none;"></div>
+  <div id="dtsContent" style="display:none;">
+
+    <div class="card">
+      <h3>Chart 3: Daily Tax Deposits — Current Year vs Prior Year</h3>
+      <div class="chart-container"><canvas id="chart3"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Chart 4: Rolling 30-Day Sum — YoY % Change</h3>
+      <div class="chart-container"><canvas id="chart4"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Recent Daily Tax Deposits (Last 100 Business Days)</h3>
+      <div class="table-wrapper">
+        <table id="dtsTable">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Daily Deposit ($bn)</th>
+              <th>Same Day Prior Year ($bn)</th>
+              <th>YoY %</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ─── Utility helpers ───────────────────────────────────────────────────────────
+
+function fmt$(v) { return (v / 1e3).toFixed(2); }              // millions → $bn with 2dp
+function fmtPct(v) { return v == null ? '—' : (v >= 0 ? '+' : '') + v.toFixed(1) + '%'; }
+function fmtPctClass(v) { return v == null ? '' : v >= 0 ? 'positive' : 'negative'; }
+function monthLabel(d) {                                        // "2025-09-30" → "Sep 2025"
+  const [y, m] = d.split('-');
+  return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m - 1] + ' ' + y;
+}
+function monthKey(d) { return d.slice(0, 7); }                  // "2025-09-30" → "2025-09"
+
+async function fetchAllPages(baseUrl) {
+  let page = 1;
+  let allData = [];
+  while (true) {
+    const sep = baseUrl.includes('?') ? '&' : '?';
+    const url = `${baseUrl}${sep}page[number]=${page}&page[size]=1000`;
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`API returned ${resp.status}: ${resp.statusText}`);
+    const json = await resp.json();
+    allData = allData.concat(json.data);
+    if (!json.links || !json.links.next || json.data.length < 1000) break;
+    page++;
+  }
+  return allData;
+}
+
+// ─── SECTION 1: Monthly Treasury Statement ─────────────────────────────────────
+
+async function loadMTS() {
+  const today = new Date();
+  const threeYearsAgo = new Date(today.getFullYear() - 3, today.getMonth(), 1);
+  const dateFilter = threeYearsAgo.toISOString().slice(0, 10);
+
+  const url = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/mts/mts_table_1'
+    + `?filter=record_date:gte:${dateFilter}`
+    + '&sort=-record_date'
+    + '&fields=record_date,classification_desc,current_month_gross_rcpt_amt';
+
+  const data = await fetchAllPages(url);
+
+  // Target categories
+  const CATS = [
+    'Individual Income Taxes',
+    'Corporation Income Taxes',
+    'Social Insurance and Retirement Receipts',
+    'Excise Taxes',
+    'Total Receipts'
+  ];
+
+  // Build map: monthKey → { category → amount (in millions) }
+  const monthMap = {};
+  data.forEach(r => {
+    if (!CATS.includes(r.classification_desc)) return;
+    const mk = monthKey(r.record_date);
+    if (!monthMap[mk]) monthMap[mk] = { date: r.record_date };
+    monthMap[mk][r.classification_desc] = +r.current_month_gross_rcpt_amt;
+  });
+
+  // Sort months ascending
+  const months = Object.keys(monthMap).sort();
+
+  // Build YoY data for rolling 24 months
+  // For each month, find the same month one year prior
+  const yoyData = [];
+  months.forEach(mk => {
+    const [y, m] = mk.split('-').map(Number);
+    const priorKey = `${y - 1}-${String(m).padStart(2, '0')}`;
+    if (!monthMap[priorKey]) return;
+    const cur = monthMap[mk];
+    const prev = monthMap[priorKey];
+
+    const row = { month: mk, date: cur.date };
+    CATS.forEach(cat => {
+      if (cur[cat] != null && prev[cat] != null && prev[cat] !== 0) {
+        row[cat] = { current: cur[cat], prior: prev[cat], pctChg: ((cur[cat] - prev[cat]) / Math.abs(prev[cat])) * 100 };
+      }
+    });
+    yoyData.push(row);
+  });
+
+  // Take last 24 months of YoY data
+  const recent = yoyData.slice(-24);
+
+  // ── Chart 1: Total Receipts YoY % ──
+  const labels1 = recent.map(r => monthLabel(r.date));
+  const values1 = recent.map(r => r['Total Receipts'] ? r['Total Receipts'].pctChg : 0);
+  const colors1 = values1.map(v => v >= 0 ? '#16a34a' : '#dc2626');
+
+  new Chart(document.getElementById('chart1'), {
+    type: 'bar',
+    data: {
+      labels: labels1,
+      datasets: [{
+        label: 'YoY % Change',
+        data: values1,
+        backgroundColor: colors1,
+        borderRadius: 3
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => fmtPct(ctx.parsed.y) } }
+      },
+      scales: {
+        y: {
+          ticks: { callback: v => v + '%' },
+          grid: { color: '#f0f0f0' }
+        },
+        x: {
+          ticks: { maxRotation: 45, font: { size: 11 } },
+          grid: { display: false }
+        }
+      }
+    }
+  });
+
+  // ── Chart 2: YoY % by category ──
+  const catColors = { 'Individual Income Taxes': '#1a73e8', 'Corporation Income Taxes': '#e8710a', 'Social Insurance and Retirement Receipts': '#9334e6' };
+  const catLabels = { 'Individual Income Taxes': 'Individual Income', 'Corporation Income Taxes': 'Corporate Income', 'Social Insurance and Retirement Receipts': 'Payroll (Social Ins.)' };
+  const displayCats = ['Individual Income Taxes', 'Corporation Income Taxes', 'Social Insurance and Retirement Receipts'];
+
+  new Chart(document.getElementById('chart2'), {
+    type: 'bar',
+    data: {
+      labels: labels1,
+      datasets: displayCats.map(cat => ({
+        label: catLabels[cat],
+        data: recent.map(r => r[cat] ? r[cat].pctChg : 0),
+        backgroundColor: catColors[cat],
+        borderRadius: 3
+      }))
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { position: 'top' },
+        tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': ' + fmtPct(ctx.parsed.y) } }
+      },
+      scales: {
+        y: {
+          ticks: { callback: v => v + '%' },
+          grid: { color: '#f0f0f0' }
+        },
+        x: {
+          ticks: { maxRotation: 45, font: { size: 11 } },
+          grid: { display: false }
+        }
+      }
+    }
+  });
+
+  // ── Monthly table ──
+  const tbody = document.querySelector('#mtsTable tbody');
+  recent.slice().reverse().forEach(r => {
+    const tr = document.createElement('tr');
+    const tot = r['Total Receipts'];
+    const curBn = tot ? fmt$(tot.current) : '—';
+    const chgBn = tot ? fmt$(tot.current - tot.prior) : '—';
+    const pct = tot ? tot.pctChg : null;
+    tr.innerHTML = `<td>${monthLabel(r.date)}</td><td>${curBn}</td>`
+      + `<td class="${fmtPctClass(pct)}">${tot ? (tot.current - tot.prior >= 0 ? '+' : '') + fmt$(tot.current - tot.prior) : '—'}</td>`
+      + `<td class="${fmtPctClass(pct)}">${fmtPct(pct)}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('mtsLoading').style.display = 'none';
+  document.getElementById('mtsContent').style.display = 'block';
+}
+
+// ─── SECTION 2: Daily Treasury Statement ────────────────────────────────────────
+
+async function loadDTS() {
+  const today = new Date();
+  const twoYearsAgo = new Date(today.getFullYear() - 2, today.getMonth(), today.getDate());
+  const dateFilter = twoYearsAgo.toISOString().slice(0, 10);
+
+  const url = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/dts/deposits_withdrawals_operating_cash'
+    + `?filter=transaction_type:eq:Tax Deposits,record_date:gte:${dateFilter}`
+    + '&sort=record_date'
+    + '&fields=record_date,transaction_type,transaction_today_amt';
+
+  const data = await fetchAllPages(url);
+
+  // Aggregate by date (sum all Tax Deposits rows for same date)
+  const dateMap = {};
+  data.forEach(r => {
+    const d = r.record_date;
+    dateMap[d] = (dateMap[d] || 0) + (+r.transaction_today_amt);
+  });
+
+  const allDates = Object.keys(dateMap).sort();
+
+  // ── Chart 3: Current year vs prior year daily deposits ──
+  const currentYear = today.getFullYear();
+  const priorYear = currentYear - 1;
+
+  function dayOfYear(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00');
+    const start = new Date(d.getFullYear(), 0, 1);
+    return Math.floor((d - start) / 86400000) + 1;
+  }
+
+  const curYearData = {};
+  const priorYearData = {};
+
+  allDates.forEach(d => {
+    const y = +d.slice(0, 4);
+    const doy = dayOfYear(d);
+    if (y === currentYear) curYearData[doy] = dateMap[d];
+    else if (y === priorYear) priorYearData[doy] = dateMap[d];
+  });
+
+  // Build aligned x-axis (day of year 1..366)
+  const allDoys = new Set([...Object.keys(curYearData), ...Object.keys(priorYearData)].map(Number));
+  const doys = [...allDoys].sort((a, b) => a - b);
+
+  // For readable x-labels, convert day-of-year to month abbreviation at the start of each month
+  function doyToLabel(doy) {
+    // Approximate: use a non-leap year reference
+    const d = new Date(2024, 0, 1);
+    d.setDate(doy);
+    return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()] + ' ' + d.getDate();
+  }
+
+  new Chart(document.getElementById('chart3'), {
+    type: 'line',
+    data: {
+      labels: doys.map(doyToLabel),
+      datasets: [
+        {
+          label: String(currentYear),
+          data: doys.map(d => curYearData[d] != null ? curYearData[d] : null),
+          borderColor: '#1a73e8',
+          backgroundColor: 'rgba(26,115,232,0.08)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.1,
+          spanGaps: true
+        },
+        {
+          label: String(priorYear),
+          data: doys.map(d => priorYearData[d] != null ? priorYearData[d] : null),
+          borderColor: '#e8710a',
+          backgroundColor: 'rgba(232,113,10,0.08)',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0.1,
+          spanGaps: true
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        tooltip: { callbacks: { label: ctx => ctx.dataset.label + ': $' + fmt$(ctx.parsed.y) + 'bn' } }
+      },
+      scales: {
+        y: {
+          ticks: { callback: v => '$' + fmt$(v) + 'bn' },
+          grid: { color: '#f0f0f0' }
+        },
+        x: {
+          ticks: {
+            maxTicksLimit: 18,
+            maxRotation: 45,
+            font: { size: 11 }
+          },
+          grid: { display: false }
+        }
+      }
+    }
+  });
+
+  // ── Chart 4: Rolling 30-day sum, YoY % change ──
+  // Compute rolling 30-day sums for each date
+  const rolling30 = {};
+  for (let i = 0; i < allDates.length; i++) {
+    const endDate = allDates[i];
+    const endTime = new Date(endDate + 'T00:00:00').getTime();
+    const startTime = endTime - 29 * 86400000;
+    let sum = 0;
+    // Sum all dates in the 30-day window
+    for (let j = i; j >= 0; j--) {
+      const t = new Date(allDates[j] + 'T00:00:00').getTime();
+      if (t < startTime) break;
+      sum += dateMap[allDates[j]];
+    }
+    rolling30[endDate] = sum;
+  }
+
+  // YoY % change on rolling 30-day sum
+  const roll30Yoy = [];
+  allDates.forEach(d => {
+    const dt = new Date(d + 'T00:00:00');
+    const priorDate = new Date(dt.getFullYear() - 1, dt.getMonth(), dt.getDate());
+    // Find closest prior-year date in data
+    const pKey = priorDate.toISOString().slice(0, 10);
+    // Search within ±3 days for a match
+    let bestKey = null;
+    for (let offset = 0; offset <= 3; offset++) {
+      for (const dir of [0, -1, 1]) {
+        const tryDate = new Date(priorDate.getTime() + (offset * dir) * 86400000);
+        const tryKey = tryDate.toISOString().slice(0, 10);
+        if (rolling30[tryKey] != null) { bestKey = tryKey; break; }
+      }
+      if (bestKey) break;
+    }
+    if (bestKey && rolling30[bestKey] !== 0) {
+      roll30Yoy.push({
+        date: d,
+        pct: ((rolling30[d] - rolling30[bestKey]) / Math.abs(rolling30[bestKey])) * 100
+      });
+    }
+  });
+
+  // Only show dates from the more recent year for chart 4
+  const chart4Data = roll30Yoy.filter(r => +r.date.slice(0, 4) >= priorYear);
+
+  new Chart(document.getElementById('chart4'), {
+    type: 'line',
+    data: {
+      labels: chart4Data.map(r => r.date),
+      datasets: [{
+        label: 'Rolling 30-Day YoY %',
+        data: chart4Data.map(r => r.pct),
+        borderColor: '#9334e6',
+        backgroundColor: 'rgba(147,52,230,0.08)',
+        borderWidth: 1.5,
+        pointRadius: 0,
+        tension: 0.2,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => fmtPct(ctx.parsed.y) } }
+      },
+      scales: {
+        y: {
+          ticks: { callback: v => v + '%' },
+          grid: { color: '#f0f0f0' }
+        },
+        x: {
+          ticks: { maxTicksLimit: 18, maxRotation: 45, font: { size: 11 } },
+          grid: { display: false }
+        }
+      }
+    }
+  });
+
+  // ── DTS table: last 100 business days ──
+  // For each recent date, find same-ish date prior year
+  const recentDates = allDates.slice(-200); // get enough to find 100 with prior-year matches
+  const tableRows = [];
+  for (let i = recentDates.length - 1; i >= 0 && tableRows.length < 100; i--) {
+    const d = recentDates[i];
+    const amt = dateMap[d];
+    const dt = new Date(d + 'T00:00:00');
+    const priorTarget = new Date(dt.getFullYear() - 1, dt.getMonth(), dt.getDate());
+
+    let priorAmt = null;
+    for (let offset = 0; offset <= 3; offset++) {
+      for (const dir of [0, -1, 1]) {
+        const tryDate = new Date(priorTarget.getTime() + (offset * dir) * 86400000);
+        const tryKey = tryDate.toISOString().slice(0, 10);
+        if (dateMap[tryKey] != null) { priorAmt = dateMap[tryKey]; break; }
+      }
+      if (priorAmt != null) break;
+    }
+
+    const yoyPct = (priorAmt != null && priorAmt !== 0) ? ((amt - priorAmt) / Math.abs(priorAmt)) * 100 : null;
+    tableRows.push({ date: d, amt, priorAmt, yoyPct });
+  }
+
+  const dtsTbody = document.querySelector('#dtsTable tbody');
+  tableRows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${r.date}</td>`
+      + `<td>${fmt$(r.amt)}</td>`
+      + `<td>${r.priorAmt != null ? fmt$(r.priorAmt) : '—'}</td>`
+      + `<td class="${fmtPctClass(r.yoyPct)}">${fmtPct(r.yoyPct)}</td>`;
+    dtsTbody.appendChild(tr);
+  });
+
+  document.getElementById('dtsLoading').style.display = 'none';
+  document.getElementById('dtsContent').style.display = 'block';
+}
+
+// ─── Main ───────────────────────────────────────────────────────────────────────
+
+(async function main() {
+  document.getElementById('lastUpdated').textContent = 'Dashboard loaded: ' + new Date().toLocaleString();
+
+  // Load both sections concurrently
+  const mtsPromise = loadMTS().catch(err => {
+    document.getElementById('mtsLoading').style.display = 'none';
+    const el = document.getElementById('mtsError');
+    el.style.display = 'block';
+    el.textContent = 'Failed to load Monthly Treasury data: ' + err.message;
+  });
+
+  const dtsPromise = loadDTS().catch(err => {
+    document.getElementById('dtsLoading').style.display = 'none';
+    const el = document.getElementById('dtsError');
+    el.style.display = 'block';
+    el.textContent = 'Failed to load Daily Treasury data: ' + err.message;
+  });
+
+  await Promise.all([mtsPromise, dtsPromise]);
+  document.getElementById('lastUpdated').textContent = 'Last updated: ' + new Date().toLocaleString();
+})();
+</script>
+</body>
+</html>
